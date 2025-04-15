@@ -1,4 +1,4 @@
-
+local library = {}
 
 local utility = {}
 
@@ -1653,6 +1653,3 @@ do
 	end
 
 end
-
-
-return utility, obelus
