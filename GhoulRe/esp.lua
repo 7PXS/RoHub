@@ -5,66 +5,57 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
-
-
--- config options
 local ESP = {
     Enabled = true,
     Players = {
         Enabled = true,
-        MaxDistance = 1000,
+        MaxDistance = 500,
         ShowDistance = true,
         ShowHealth = true,
         IgnoreTeammates = false,
-        RefreshRate = 0.1,
-        ProximityNotificationsEnabled = false,
-        ProximityNotificationDistance = 500,
         EnemyColor = Color3.fromRGB(255, 0, 0),
-        Text = {
-            Enabled = true,
-            Font = 2,
-            Size = 13,
-            Color = Color3.new(0.117647, 1.000000, 0.000000),
-            Outline = true,
-            OutlineColor = Color3.fromRGB(0, 0, 0)
-        },
-        HealthBar = {
-            Enabled = true,
-            Height = 4000,
-            Width = 2,
-            Color = Color3.fromRGB(0, 255, 0),
-            BackgroundColor = Color3.fromRGB(255, 0, 0),
-            Outline = true,
-            OutlineColor = Color3.fromRGB(0, 0, 0)
-        },
-        Tracer = {
-            Enabled = false,
-            Color = Color3.fromRGB(0, 255, 255),
-            Thickness = 1,
-            Origin = "Bottom",
-            Transparency = 0.7
-        }
-    }
+        TextSize = 13,
+        TextColor = Color3.new(0.117647, 1.000000, 0.000000),
+        OutlineColor = Color3.fromRGB(0, 0, 0)
+    },
+    NPCs = {
+        Enabled = true,
+        MaxDistance = 1000,
+        ShowDistance = true,
+        ShowHealth = true,
+        TextSize = 13,
+        TextColor = Color3.new(1, 0.65, 0),
+        OutlineColor = Color3.fromRGB(0, 0, 0)
+    },
+    LootBoxes = {
+        Enabled = true,
+        MaxDistance = 1000,
+        ShowDistance = true,
+        TextSize = 13,
+        TextColor = Color3.new(1, 0.84, 0),
+        OutlineColor = Color3.fromRGB(0, 0, 0)
+    },
+    LootBags = {
+        Enabled = true,
+        MaxDistance = 1000,
+        ShowDistance = true,
+        TextSize = 13,
+        TextColor = Color3.new(0.29, 0, 0.51),
+        OutlineColor = Color3.fromRGB(0, 0, 0)
+    },
+    RefreshRate = 0
 }
 
--- player info functions
-local function getPlayerRank(playerName)
-    local entity = workspace.Entities:FindFirstChild(playerName)
-    if entity and entity:FindFirstChild("Rank") then
-        return tostring(entity.Rank.Value)
-    end
-    return "No Rank"
-end
 
-local function getPlayerWeapon(playerName)
-    local entity = workspace.Entities:FindFirstChild(playerName)
-    if entity and entity:FindFirstChild("Type") then
-        return tostring(entity.Type.Value)
-    end
-    return "No Weapon"
-end
+local cache = {
+    drawings = {},
+    espData = {}
+}
+
 
 local function getInstancePosition(instance)
+    if not instance then return nil end
+    
     if instance:IsA("BasePart") then
         return instance.Position
     elseif instance:IsA("Model") then
@@ -81,8 +72,11 @@ local function getInstancePosition(instance)
     return nil
 end
 
--- utility stuff
-local function getDistance(instance)
+local function getDistance(pos1, pos2)
+    return (pos1 - pos2).Magnitude
+end
+
+local function getPlayerDistance(instance)
     local character = LocalPlayer.Character
     local rootPart = character and character:FindFirstChild("HumanoidRootPart")
     
@@ -91,238 +85,410 @@ local function getDistance(instance)
     local targetPosition = getInstancePosition(instance)
     if not targetPosition then return 0 end
     
-    return (rootPart.Position - targetPosition).Magnitude
+    return getDistance(rootPart.Position, targetPosition)
 end
 
-local function createDrawing(class, properties)
-    local drawing = Drawing.new(class)
-    for property, value in pairs(properties) do
-        drawing[property] = value
+
+local function getDrawing(id, type, properties)
+    if not cache.drawings[id] then
+        cache.drawings[id] = Drawing.new(type)
+        
+
+        for prop, value in pairs(properties) do
+            cache.drawings[id][prop] = value
+        end
     end
-    return drawing
+    
+    return cache.drawings[id]
 end
 
-local function createESP(player)
-    local settings = ESP.Players
+local function identifyEntityType(entity)
+    if not entity then return "unknown" end
     
-    local esp = {
-        Player = player,
-        Drawings = {
-            Info = nil,
-            HealthBarOutline = nil,
-            HealthBarBackground = nil,
-            HealthBarFill = nil,
-            Tracer = nil
-        },
-        Connection = nil
-    }
+    -- NPC identification
+    if entity.Name:match("^Humanoid_[%w%-]+$") or entity.Name:match("^%(.-%)Humanoid_[%w%-]+$") then 
+        return "npc" 
+    end
+    
+    if entity:IsA("Player") or Players:FindFirstChild(entity.Name) then
+        return "player"
+    end
+    
+    -- Check for loot boxes
+    if entity.Name == "giftbox_blend" and entity:FindFirstChild("Giftbox01") then
+        return "lootbox"
+    end
+    
+    -- Check for loot bags
+    if entity.Name == "Lootbag" then
+        return "lootbag"
+    end
+    
+    return "unknown"
+end
 
-    local function updateFont()
-        if esp.Drawings.Info then
-            esp.Drawings.Info.Font = settings.Text.Font
+-- Extract NPC name from format
+local function extractNPCName(name)
+    local tag = "NPC"
+    return tag or "NPC"
+end
+
+
+local function updateESP()
+    if not ESP.Enabled then
+
+        for id, drawing in pairs(cache.drawings) do
+            drawing.Visible = false
         end
-    end
-    
-    -- text creation
-    if settings.Text.Enabled then
-        esp.Drawings.Info = createDrawing("Text", {
-            Text = "",
-            Size = settings.Text.Size,
-            Center = true,
-            Outline = settings.Text.Outline,
-            OutlineColor = settings.Text.OutlineColor,
-            Color = settings.Text.Color,
-            Font = settings.Text.Font,
-            Visible = false
-        })
+        return
     end
 
-    esp.UpdateFont = updateFont
+    local playerCharacter = LocalPlayer.Character
+    local playerRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+    if not playerRoot then return end
     
-    -- health bar creation
-    if settings.HealthBar.Enabled then
-        esp.Drawings.HealthBarOutline = createDrawing("Square", {
-            Thickness = 1,
-            Color = settings.HealthBar.OutlineColor,
-            Filled = false,
-            Visible = false
-        })
-        
-        esp.Drawings.HealthBarBackground = createDrawing("Square", {
-            Color = settings.HealthBar.BackgroundColor,
-            Filled = true,
-            Visible = false
-        })
-        
-        esp.Drawings.HealthBarFill = createDrawing("Square", {
-            Color = settings.HealthBar.Color,
-            Filled = true,
-            Visible = false
-        })
-    end
+    local playerPosition = playerRoot.Position
     
-    -- tracer creation
-    if settings.Tracer.Enabled then
-        esp.Drawings.Tracer = createDrawing("Line", {
-            Thickness = settings.Tracer.Thickness,
-            Color = settings.Tracer.Color,
-            Transparency = settings.Tracer.Transparency,
-            Visible = false
-        })
-    end
-    
-    -- updating esp elements
-    local function updateESP()
-        if not ESP.Enabled or not settings.Enabled then
-            for _, drawing in pairs(esp.Drawings) do
-                if drawing then
-                    drawing.Visible = false
-                end
+
+    for id, data in pairs(cache.espData) do
+        local entity = data.entity
+        local entityType = data.type
+        
+        -- Skip if entity no longer exists
+        if not entity or not entity.Parent then
+            -- Clean up drawings for this entity
+            if cache.drawings[id .. "_text"] then
+                cache.drawings[id .. "_text"].Visible = false
             end
-            return
+            cache.espData[id] = nil
+            continue
         end
         
-        if not player or not player.Parent then
-            esp:Destroy()
-            return
-        end
+        -- Get entity position based on type
+        local position
+        local humanoid
         
-        local character = player.Character
-        if not character or not character:FindFirstChild("HumanoidRootPart") or not character:FindFirstChild("Humanoid") then
-            for _, drawing in pairs(esp.Drawings) do
-                if drawing then
-                    drawing.Visible = false
-                end
-            end
-            return
-        end
-        
-        local humanoid = character:FindFirstChild("Humanoid")
-        local rootPart = character:FindFirstChild("HumanoidRootPart")
-        
-        local position = rootPart.Position
-        local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(position)
-        local distance = getDistance(character)
-        
-        local isVisible = onScreen and distance <= settings.MaxDistance
-        
-        if settings.IgnoreTeammates and player.Team == LocalPlayer.Team then
-            isVisible = false
-        end
-        
-        if isVisible then
-            local basePosition = Vector2.new(screenPos.X, screenPos.Y)
-            local scaleFactor = 1 / (screenPos.Z * 0.75)
-            local textOffset = Vector2.new(0, -45 * scaleFactor)
+        if entityType == "player" then
+            local character = entity.Character
+            if not character then continue end
             
-            if esp.Drawings.Info and settings.Text.Enabled then
-                local playerName = player.Name
-                local rank = getPlayerRank(playerName)
-                local weapon = getPlayerWeapon(playerName)
-                
-                local infoText = playerName
-                infoText = string.format("%s [%s]", infoText, rank)
-                infoText = string.format("%s [%s]", infoText, weapon)
-                
-                if settings.ShowHealth and humanoid then
-                    infoText = string.format("%s [%d/%d]", infoText, math.floor(humanoid.Health), math.floor(humanoid.MaxHealth))
-                end
-                if settings.ShowDistance then
-                    infoText = string.format("%s [%d]", infoText, math.floor(distance))
-                end
-                
-                esp.Drawings.Info.Text = infoText
-                esp.Drawings.Info.Position = basePosition + textOffset
-                esp.Drawings.Info.Visible = true
-            end
+            local rootPart = character:FindFirstChild("HumanoidRootPart")
+            if not rootPart then continue end
             
-            if settings.HealthBar.Enabled and humanoid and esp.Drawings.HealthBarOutline then
-                local healthBarWidth = settings.HealthBar.Width
-                local healthBarHeight = settings.HealthBar.Height * scaleFactor
-                local healthBarPosition = basePosition + Vector2.new(-30 * scaleFactor, -healthBarHeight/2)
-                
-                esp.Drawings.HealthBarOutline.Size = Vector2.new(healthBarWidth + 2, healthBarHeight + 2)
-                esp.Drawings.HealthBarOutline.Position = healthBarPosition - Vector2.new(1, 1)
-                esp.Drawings.HealthBarOutline.Visible = true
-                
-                esp.Drawings.HealthBarBackground.Size = Vector2.new(healthBarWidth, healthBarHeight)
-                esp.Drawings.HealthBarBackground.Position = healthBarPosition
-                esp.Drawings.HealthBarBackground.Visible = true
-                
-                local healthRatio = humanoid.Health / humanoid.MaxHealth
-                esp.Drawings.HealthBarFill.Size = Vector2.new(healthBarWidth, healthBarHeight * healthRatio)
-                esp.Drawings.HealthBarFill.Position = Vector2.new(
-                    healthBarPosition.X,
-                    healthBarPosition.Y + (healthBarHeight * (1 - healthRatio))
-                )
-                esp.Drawings.HealthBarFill.Visible = true
-            end
+            position = rootPart.Position
+            humanoid = character:FindFirstChild("Humanoid")
+        elseif entityType == "npc" then
+            local rootPart = entity:FindFirstChild("HumanoidRootPart")
+            if not rootPart then continue end
             
-            if esp.Drawings.Tracer and settings.Tracer.Enabled then
-                local origin
-                if settings.Tracer.Origin == "Mouse" then
-                    origin = Vector2.new(LocalPlayer:GetMouse().X, LocalPlayer:GetMouse().Y)
-                elseif settings.Tracer.Origin == "Center" then
-                    origin = Vector2.new(workspace.CurrentCamera.ViewportSize.X/2, workspace.CurrentCamera.ViewportSize.Y/2)
-                else
-                    origin = Vector2.new(workspace.CurrentCamera.ViewportSize.X/2, workspace.CurrentCamera.ViewportSize.Y)
-                end
-                
-                esp.Drawings.Tracer.From = origin
-                esp.Drawings.Tracer.To = basePosition
-                esp.Drawings.Tracer.Visible = true
-            end
+            position = rootPart.Position
+            humanoid = entity:FindFirstChild("Humanoid")
         else
-            for _, drawing in pairs(esp.Drawings) do
-                if drawing then
-                    drawing.Visible = false
+            position = getInstancePosition(entity)
+            if not position then continue end
+        end
+        
+
+        local distance = getDistance(playerPosition, position)
+        local config = ESP[entityType == "player" and "Players" or
+                         entityType == "npc" and "NPCs" or
+                         entityType == "lootbox" and "LootBoxes" or
+                         entityType == "lootbag" and "LootBags"]
+        
+        if not config or not config.Enabled or distance > config.MaxDistance then
+
+            if cache.drawings[id .. "_text"] then
+                cache.drawings[id .. "_text"].Visible = false
+            end
+            continue
+        end
+        
+        -- Check if entity is on screen
+        local screenPos, onScreen = camera:WorldToViewportPoint(position)
+        if not onScreen then
+            if cache.drawings[id .. "_text"] then
+                cache.drawings[id .. "_text"].Visible = false
+            end
+            continue
+        end
+        
+
+        local basePosition = Vector2.new(screenPos.X, screenPos.Y)
+        local scaleFactor = 1 / (screenPos.Z * 0.75)
+        local textOffset = Vector2.new(0, -45 * scaleFactor)
+        
+        local displayText = ""
+        
+        if entityType == "player" then
+            displayText = entity.Name
+            
+            if config.ShowHealth and humanoid then
+                displayText = string.format("%s [%d/%d]", displayText, 
+                    math.floor(humanoid.Health), math.floor(humanoid.MaxHealth))
+            end
+        elseif entityType == "npc" then
+            displayText = extractNPCName(entity.Name)
+            
+            if config.ShowHealth and humanoid then
+                displayText = string.format("%s [%d/%d]", displayText, 
+                    math.floor(humanoid.Health), math.floor(humanoid.MaxHealth))
+            end
+        elseif entityType == "lootbox" then
+            displayText = "Loot Box"
+        elseif entityType == "lootbag" then
+            displayText = "Loot Bag"
+        end
+        
+        if config.ShowDistance then
+            displayText = string.format("%s [%d]", displayText, math.floor(distance))
+        end
+        
+        -- Get or create text drawing
+        local textDrawing = getDrawing(id .. "_text", "Text", {
+            Text = displayText,
+            Size = config.TextSize,
+            Center = true,
+            Outline = true,
+            OutlineColor = config.OutlineColor,
+            Color = config.TextColor,
+            Font = 2,
+            Visible = true
+        })
+        
+        -- Update text
+        textDrawing.Text = displayText
+        textDrawing.Position = basePosition + textOffset
+        textDrawing.Visible = true
+    end
+end
+
+local function monitorPlayers()
+    local function trackPlayer(player)
+        if player == LocalPlayer then return end
+        
+        local id = "player_" .. player.UserId
+        
+        cache.espData[id] = {
+            entity = player,
+            type = "player"
+        }
+    end
+    
+
+    for _, player in pairs(Players:GetPlayers()) do
+        trackPlayer(player)
+    end
+    
+
+    Players.PlayerAdded:Connect(trackPlayer)
+    
+    Players.PlayerRemoving:Connect(function(player)
+        local id = "player_" .. player.UserId
+        cache.espData[id] = nil
+        
+        -- Clean up drawings
+        if cache.drawings[id .. "_text"] then
+            cache.drawings[id .. "_text"].Visible = false
+        end
+    end)
+end
+
+local function monitorNPCs()
+
+    local function scanForNPCs()
+
+        local entities = workspace:FindFirstChild("Entities")
+        
+        if entities then
+            for _, entity in pairs(entities:GetChildren()) do
+                if identifyEntityType(entity) == "npc" then
+                    local id = "npc_" .. entity.Name
+                    
+                    if not cache.espData[id] then
+                        cache.espData[id] = {
+                            entity = entity,
+                            type = "npc"
+                        }
+                    end
+                end
+            end
+        end
+        
+
+        for _, entity in pairs(workspace:GetChildren()) do
+            if identifyEntityType(entity) == "npc" then
+                local id = "npc_" .. entity.Name
+                
+                if not cache.espData[id] then
+                    cache.espData[id] = {
+                        entity = entity,
+                        type = "npc"
+                    }
                 end
             end
         end
     end
     
-    -- cleanup
-    function esp:Destroy()
-        for _, drawing in pairs(self.Drawings) do
-            if drawing then
-                drawing:Remove()
+
+    scanForNPCs()
+
+    spawn(function()
+        while wait(ESP.RefreshRate * 2) do 
+            scanForNPCs()
+        end
+    end)
+    
+    workspace.DescendantAdded:Connect(function(descendant)
+        if identifyEntityType(descendant) == "npc" then
+            local id = "npc_" .. descendant.Name
+            
+            if not cache.espData[id] then
+                cache.espData[id] = {
+                    entity = descendant,
+                    type = "npc"
+                }
             end
         end
-        if self.Connection then
-            self.Connection:Disconnect()
+    end)
+end
+
+local function monitorLootBoxes()
+    local function scanForLootBoxes()
+        for _, model in pairs(workspace:GetDescendants()) do
+            if model.Name == "giftbox_blend" and model:FindFirstChild("Giftbox01") then
+                local id = "lootbox_" .. model:GetFullName()
+                
+                if not cache.espData[id] then
+                    cache.espData[id] = {
+                        entity = model,
+                        type = "lootbox"
+                    }
+                end
+            end
         end
     end
     
-    esp.Connection = RunService.RenderStepped:Connect(updateESP)
-    updateESP()
+
+    scanForLootBoxes()
     
-    return esp
+
+    spawn(function()
+        while wait(ESP.RefreshRate * 5) do 
+            scanForLootBoxes()
+        end
+    end)
+    
+    -- Check for new loot boxes
+    workspace.DescendantAdded:Connect(function(descendant)
+        if descendant.Name == "Giftbox01" and descendant.Parent and descendant.Parent.Name == "giftbox_blend" then
+            local id = "lootbox_" .. descendant.Parent:GetFullName()
+            
+            if not cache.espData[id] then
+                cache.espData[id] = {
+                    entity = descendant.Parent,
+                    type = "lootbox"
+                }
+            end
+        end
+    end)
 end
 
--- main esp management
-local espObjects = {}
-
--- player handling
-local function onPlayerAdded(player)
-    if player ~= LocalPlayer then
-        espObjects[player] = createESP(player)
+local function monitorLootBags()
+    local function scanForLootBags()
+        local lootBagsFolder = workspace:FindFirstChild("Lootbags")
+        if not lootBagsFolder then return end
+        
+        for _, lootBag in pairs(lootBagsFolder:GetChildren()) do
+            if lootBag.Name == "Lootbag" then
+                local id = "lootbag_" .. lootBag:GetFullName()
+                
+                if not cache.espData[id] then
+                    cache.espData[id] = {
+                        entity = lootBag,
+                        type = "lootbag"
+                    }
+                end
+            end
+        end
     end
-end
+    
 
-local function onPlayerRemoving(player)
-    if espObjects[player] then
-        espObjects[player]:Destroy()
-        espObjects[player] = nil
+    scanForLootBags()
+    
+
+    spawn(function()
+        while wait(ESP.RefreshRate * 5) do 
+            scanForLootBags()
+        end
+    end)
+    
+    local lootBagsFolder = workspace:FindFirstChild("Lootbags")
+    if lootBagsFolder then
+        lootBagsFolder.ChildAdded:Connect(function(child)
+            if child.Name == "Lootbag" then
+                local id = "lootbag_" .. child:GetFullName()
+                
+                if not cache.espData[id] then
+                    cache.espData[id] = {
+                        entity = child,
+                        type = "lootbag"
+                    }
+                end
+            end
+        end)
+        
+        lootBagsFolder.ChildRemoved:Connect(function(child)
+            local id = "lootbag_" .. child:GetFullName()
+            cache.espData[id] = nil
+        end)
     end
+    
+
+    workspace.ChildAdded:Connect(function(child)
+        if child.Name == "Lootbags" then
+            child.ChildAdded:Connect(function(lootBag)
+                if lootBag.Name == "Lootbag" then
+                    local id = "lootbag_" .. lootBag:GetFullName()
+                    
+                    if not cache.espData[id] then
+                        cache.espData[id] = {
+                            entity = lootBag,
+                            type = "lootbag"
+                        }
+                    end
+                end
+            end)
+            
+            child.ChildRemoved:Connect(function(lootBag)
+                local id = "lootbag_" .. lootBag:GetFullName()
+                cache.espData[id] = nil
+            end)
+            
+
+            for _, lootBag in pairs(child:GetChildren()) do
+                if lootBag.Name == "Lootbag" then
+                    local id = "lootbag_" .. lootBag:GetFullName()
+                    
+                    if not cache.espData[id] then
+                        cache.espData[id] = {
+                            entity = lootBag,
+                            type = "lootbag"
+                        }
+                    end
+                end
+            end
+        end
+    end)
 end
 
--- setup existing players
-for _, player in pairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        onPlayerAdded(player)
-    end
+local function init()
+    monitorPlayers()
+    monitorNPCs()
+    monitorLootBoxes()
+    monitorLootBags()
+    
+    RunService.RenderStepped:Connect(updateESP)
+    
 end
 
--- event connections
-Players.PlayerAdded:Connect(onPlayerAdded)
-Players.PlayerRemoving:Connect(onPlayerRemoving)
+init()
